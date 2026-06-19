@@ -1,0 +1,2 @@
+napi::Either<Vec<types::CartesianPoint>, shared_memory::SharedCartesianBuffer>
+napi::Either<Vec<types::CartesianPoint>, shared_memory::SharedCartesianBuffer>: napi::bindgen_prelude::FromNapiValue

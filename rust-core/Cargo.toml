@@ -1,0 +1,29 @@
+[package]
+name = "cnc-native"
+version = "1.0.0"
+edition = "2021"
+authors = ["CNC Simulator Team"]
+description = "五轴数控机床仿真核心模块 - G-code解析 + RTCP运动学"
+license = "MIT"
+
+[lib]
+name = "cnc_native"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16", default-features = false, features = ["napi8", "async"] }
+napi-derive = "2.16"
+rayon = "1.8"
+memmap2 = "0.9"
+ahash = "0.8"
+float-cmp = "0.9"
+
+[build-dependencies]
+napi-build = "2.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

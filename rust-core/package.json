@@ -1,0 +1,8 @@
+{
+  "name": "cnc-native",
+  "version": "1.0.0",
+  "main": "index.js",
+  "napi": {
+    "binaryName": "cnc_native"
+  }
+}
