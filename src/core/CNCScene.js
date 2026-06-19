@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { VoxelEngine, Aabb } from './VoxelEngine.js'
 
 export class CNCScene {
   constructor(container) {
@@ -47,6 +48,27 @@ export class CNCScene {
     this._disposed = false
     this.isInitialized = false
     this._renderInfo = { geometries: 0, materials: 0, textures: 0 }
+
+    this.voxelEngine = null
+    this.voxelMesh = null
+    this.voxelGeometry = null
+    this.voxelMaterial = null
+    this.voxelInstanceCount = 0
+    this.voxelMaxInstances = 50000
+    this.voxelEnabled = true
+    this.voxelSize = 2.5
+
+    this.collisionAlarm = {
+      active: false,
+      fixtureCollision: false,
+      workpieceCollision: false,
+      flashPhase: 0,
+      flashSpeed: 8,
+    }
+    this.onCollisionCallback = null
+
+    this.lastCarvedIndex = -1
+    this.cutStep = 1
   }
 
   init() {
@@ -274,6 +296,171 @@ export class CNCScene {
     wp.castShadow = true
     wp.receiveShadow = true
     this.workpieceGroup.add(wp)
+    this.workpieceBaseMesh = wp
+  }
+
+  _createVoxelEngine(bounds) {
+    if (!this.voxelEnabled) return
+
+    const toolR = 5
+    const toolLen = 100
+
+    this.voxelEngine = new VoxelEngine(
+      bounds,
+      this.voxelSize,
+      toolR,
+      toolLen,
+      0.5
+    )
+    this.voxelEngine.setHolder(80, 35)
+
+    const tableTopY = 170 + 65
+    const fixture1 = new Aabb(
+      bounds.minX - 10, tableTopY, bounds.minZ - 10,
+      bounds.minX + 20, tableTopY + 40, bounds.maxZ + 10
+    )
+    const fixture2 = new Aabb(
+      bounds.maxX - 20, tableTopY, bounds.minZ - 10,
+      bounds.maxX + 10, tableTopY + 40, bounds.maxZ + 10
+    )
+    this.voxelEngine.addFixture(fixture1)
+    this.voxelEngine.addFixture(fixture2)
+
+    this._createVoxelMesh()
+  }
+
+  _createVoxelMesh() {
+    if (!this.voxelEngine) return
+    this._clearVoxelMesh()
+
+    const vs = this.voxelSize
+    const geo = new THREE.BoxGeometry(vs * 0.95, vs * 0.95, vs * 0.95)
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x88aabb,
+      roughness: 0.6,
+      metalness: 0.25,
+      flatShading: true,
+    })
+
+    const mesh = new THREE.InstancedMesh(geo, mat, this.voxelMaxInstances)
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    mesh.count = 0
+
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < this.voxelMaxInstances; i++) {
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = false
+
+    this.voxelMesh = mesh
+    this.voxelGeometry = geo
+    this.voxelMaterial = mat
+    this.workpieceGroup.add(mesh)
+
+    this._updateVoxelMesh()
+  }
+
+  _updateVoxelMesh() {
+    if (!this.voxelEngine || !this.voxelMesh) return
+
+    const points = this.voxelEngine.extractSurfacePoints(this.voxelMaxInstances)
+    const count = Math.floor(points.length / 3)
+    const dummy = new THREE.Object3D()
+
+    for (let i = 0; i < count; i++) {
+      const x = points[i * 3]
+      const y = points[i * 3 + 1]
+      const z = points[i * 3 + 2]
+      dummy.position.set(x, y, z)
+      dummy.updateMatrix()
+      this.voxelMesh.setMatrixAt(i, dummy.matrix)
+    }
+
+    this.voxelMesh.count = count
+    this.voxelMesh.instanceMatrix.needsUpdate = true
+    this.voxelInstanceCount = count
+  }
+
+  _clearVoxelMesh() {
+    if (this.voxelMesh) {
+      this.workpieceGroup.remove(this.voxelMesh)
+      this._disposeGeometry(this.voxelMesh.geometry)
+      this._disposeMaterial(this.voxelMesh.material)
+      this.voxelMesh = null
+    }
+    if (this.voxelGeometry) {
+      this._disposeGeometry(this.voxelGeometry)
+      this.voxelGeometry = null
+    }
+    if (this.voxelMaterial) {
+      this._disposeMaterial(this.voxelMaterial)
+      this.voxelMaterial = null
+    }
+    this.voxelInstanceCount = 0
+  }
+
+  resetVoxelWorkpiece() {
+    if (this.voxelEngine) {
+      this.voxelEngine.resetWorkpiece()
+      this._updateVoxelMesh()
+    }
+    this.lastCarvedIndex = -1
+    this.collisionAlarm.active = false
+    this.collisionAlarm.fixtureCollision = false
+    this.collisionAlarm.workpieceCollision = false
+  }
+
+  setVoxelEnabled(enabled) {
+    this.voxelEnabled = enabled
+    if (!enabled) {
+      this._clearVoxelMesh()
+      this.voxelEngine = null
+    } else if (this.cartesianPositions && this.totalToolPoints > 0) {
+      const bounds = this._computeToolpathBounds()
+      this._createVoxelEngine(bounds)
+    }
+  }
+
+  setVoxelSize(size) {
+    this.voxelSize = Math.max(0.5, size)
+    if (this.voxelEngine && this.cartesianPositions && this.totalToolPoints > 0) {
+      const bounds = this._computeToolpathBounds()
+      this._createVoxelEngine(bounds)
+    }
+  }
+
+  _computeToolpathBounds() {
+    if (!this.cartesianPositions || this.totalToolPoints === 0) {
+      return new Aabb(-150, 170, -150, 150, 320, 150)
+    }
+    let minX = Infinity, minY = Infinity, minZ = Infinity
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+    const step = Math.max(1, Math.floor(this.totalToolPoints / 2000))
+    for (let i = 0; i < this.totalToolPoints; i += step) {
+      const x = this.cartesianPositions[i * 3]
+      const y = this.cartesianPositions[i * 3 + 1]
+      const z = this.cartesianPositions[i * 3 + 2]
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+    const toolR = 10
+    const pad = toolR * 2
+    minX -= pad
+    minY -= pad
+    minZ -= pad
+    maxX += pad
+    maxY += pad
+    maxZ += pad
+    const tableTopY = 170 + 65
+    minY = Math.min(minY, tableTopY + 5)
+    maxY = Math.max(maxY, tableTopY + 30)
+    return new Aabb(minX, minY, minZ, maxX, maxY, maxZ)
   }
 
   loadToolpathFromShared(sab, count, offsets, colorMode = 'feedrate') {
@@ -333,6 +520,16 @@ export class CNCScene {
 
     this.toolpathLine = new THREE.Line(this.toolpathGeometry, this.toolpathMaterial)
     this.toolpathGroup.add(this.toolpathLine)
+
+    if (this.voxelEnabled) {
+      const bounds = this._computeToolpathBounds()
+      this._createVoxelEngine(bounds)
+    }
+
+    if (this.workpieceBaseMesh) {
+      this.workpieceBaseMesh.visible = !this.voxelEnabled
+    }
+
     this._fitCameraToToolpath(positions, count)
   }
 
@@ -390,6 +587,117 @@ export class CNCScene {
     this.toolGroup.position.set(x, y + 700, z)
     this._updateTrailFast(idx, trailLength)
     this._updateMachinePose(x, y, z, idx)
+    this._advanceVoxelCut(idx)
+    this._checkCollisions(x, y, z)
+  }
+
+  _advanceVoxelCut(toIdx) {
+    if (!this.voxelEngine) return
+    if (toIdx <= this.lastCarvedIndex) return
+    if (this.lastCarvedIndex < 0) {
+      this.lastCarvedIndex = toIdx
+      return
+    }
+
+    const startIdx = Math.max(0, this.lastCarvedIndex)
+    const endIdx = toIdx
+
+    let needsUpdate = false
+
+    for (let i = startIdx; i < endIdx; i += this.cutStep) {
+      const nextIdx = Math.min(i + this.cutStep, endIdx)
+      const x0 = this.cartesianPositions[i * 3]
+      const y0 = this.cartesianPositions[i * 3 + 1]
+      const z0 = this.cartesianPositions[i * 3 + 2]
+      const x1 = this.cartesianPositions[nextIdx * 3]
+      const y1 = this.cartesianPositions[nextIdx * 3 + 1]
+      const z1 = this.cartesianPositions[nextIdx * 3 + 2]
+
+      const feed = this.feedrateValues?.[i] ?? 0
+      if (feed < 1) continue
+
+      const removed = this.voxelEngine.carveSegment(x0, y0, z0, x1, y1, z1, 128)
+      if (removed > 0) {
+        needsUpdate = true
+      }
+    }
+
+    if (needsUpdate) {
+      this._updateVoxelMesh()
+    }
+    this.lastCarvedIndex = endIdx
+  }
+
+  _checkCollisions(tipX, tipY, tipZ) {
+    if (!this.voxelEngine) return
+
+    const fixtureHit = this.voxelEngine.checkFixtureCollision(tipX, tipY, tipZ)
+    const workpieceHit = this.voxelEngine.checkToolCollision(tipX, tipY, tipZ)
+
+    const wasActive = this.collisionAlarm.active
+    const wasFixture = this.collisionAlarm.fixtureCollision
+    const wasWorkpiece = this.collisionAlarm.workpieceCollision
+    this.collisionAlarm.fixtureCollision = fixtureHit
+    this.collisionAlarm.workpieceCollision = workpieceHit
+    this.collisionAlarm.active = fixtureHit || workpieceHit
+
+    const statusChanged = wasActive !== this.collisionAlarm.active
+      || wasFixture !== fixtureHit
+      || wasWorkpiece !== workpieceHit
+
+    if (statusChanged && this.onCollisionCallback) {
+      this.onCollisionCallback({
+        active: this.collisionAlarm.active,
+        fixtureCollision: fixtureHit,
+        workpieceCollision: workpieceHit,
+        lastCollisionPos: this.collisionAlarm.active ? [tipX, tipY, tipZ] : null,
+      })
+    }
+  }
+
+  setOnCollisionCallback(cb) {
+    this.onCollisionCallback = cb
+  }
+
+  _updateCollisionFlash(dt) {
+    if (!this.collisionAlarm.active) {
+      if (this.toolHolderMesh?.material?.emissive) {
+        this.toolHolderMesh.material.emissive.setHex(0x000000)
+      }
+      return
+    }
+    this.collisionAlarm.flashPhase += dt * this.collisionAlarm.flashSpeed
+    const intensity = (Math.sin(this.collisionAlarm.flashPhase) + 1) * 0.5
+    if (this.toolHolderMesh?.material?.emissive) {
+      this.toolHolderMesh.material.emissive.setRGB(intensity * 0.8, 0, 0)
+    }
+    if (this.spindleHead?.material?.emissive) {
+      this.spindleHead.material.emissive.setRGB(intensity * 0.3, 0, 0)
+    }
+  }
+
+  getVoxelStats() {
+    if (!this.voxelEngine) {
+      return null
+    }
+    return {
+      totalVoxels: this.voxelEngine.totalVoxels,
+      solidVoxels: this.voxelEngine.solidVoxels,
+      removedRatio: this.voxelEngine.removedRatio,
+      voxelSize: this.voxelEngine.voxelSize,
+      gridSize: this.voxelEngine.gridSize,
+      instanceCount: this.voxelInstanceCount,
+      boundsMin: this.voxelEngine.boundsMin,
+      boundsMax: this.voxelEngine.boundsMax,
+    }
+  }
+
+  getCollisionStatus() {
+    return {
+      active: this.collisionAlarm.active,
+      fixtureCollision: this.collisionAlarm.fixtureCollision,
+      workpieceCollision: this.collisionAlarm.workpieceCollision,
+    }
   }
 
   _ensureTrailGeometry(maxPoints) {
@@ -596,6 +904,7 @@ export class CNCScene {
     if (this.onFrameCallback) {
       this.onFrameCallback(dt, this.clock.elapsedTime)
     }
+    this._updateCollisionFlash(dt)
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -644,6 +953,10 @@ export class CNCScene {
 
     this._clearToolpath()
     this._clearTrail()
+    this._clearVoxelMesh()
+
+    this.voxelEngine = null
+    this.onCollisionCallback = null
 
     if (this.controls?.dispose) {
       try { this.controls.dispose() } catch (e) { /* noop */ }

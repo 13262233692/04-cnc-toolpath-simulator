@@ -190,6 +190,108 @@
         </div>
       </div>
     </div>
+
+    <div class="panel collision-alarm-panel" :class="{ 'collision-active': store.collisionStatus.active }">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span class="panel-icon alarm-icon">🚨</span>
+          <span>碰撞检测</span>
+        </div>
+        <div class="alarm-status-pill" :class="{ active: store.collisionStatus.active }">
+          {{ store.collisionStatus.active ? '警报' : '安全' }}
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="alarm-lamp-wrap">
+          <div class="alarm-lamp" :class="{ flashing: store.collisionStatus.active }">
+            <div class="lamp-glow"></div>
+            <div class="lamp-bulb"></div>
+          </div>
+          <div class="alarm-label">
+            {{ store.collisionStatus.active ? '干涉警报！' : '系统正常' }}
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="collision-detail">
+          <div class="cd-row">
+            <span class="cd-label">刀柄-工件</span>
+            <span class="cd-value" :class="{ danger: store.collisionStatus.workpieceCollision }">
+              {{ store.collisionStatus.workpieceCollision ? '干涉' : '正常' }}
+            </span>
+          </div>
+          <div class="cd-row">
+            <span class="cd-label">刀柄-治具</span>
+            <span class="cd-value" :class="{ danger: store.collisionStatus.fixtureCollision }">
+              {{ store.collisionStatus.fixtureCollision ? '干涉' : '正常' }}
+            </span>
+          </div>
+          <div class="cd-row">
+            <span class="cd-label">累计警报</span>
+            <span class="cd-value count">{{ store.collisionStatus.collisionCount }} 次</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel voxel-panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span class="panel-icon">🧊</span>
+          <span>体素切削模拟</span>
+        </div>
+        <label class="voxel-toggle">
+          <input type="checkbox" v-model="store.viewOptions.enableVoxel" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <div class="panel-body">
+        <div class="option-group" v-if="store.voxelStats">
+          <div class="stat-grid">
+            <div class="stat-item">
+              <div class="stat-label">体素网格</div>
+              <div class="stat-value">{{ formatGridSize(store.voxelStats.gridSize) }}</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">体素尺寸</div>
+              <div class="stat-value">{{ store.voxelStats.voxelSize.toFixed(1) }} mm</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">实体体素</div>
+              <div class="stat-value">{{ formatNum(store.voxelStats.solidVoxels) }}</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">去除率</div>
+              <div class="stat-value removed">{{ (store.voxelStats.removedRatio * 100).toFixed(1) }}%</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="option-group">
+          <div class="option-label">体素分辨率: {{ store.viewOptions.voxelSize.toFixed(1) }} mm</div>
+          <input
+            type="range"
+            class="voxel-slider"
+            min="1"
+            max="10"
+            step="0.5"
+            v-model.number="store.viewOptions.voxelSize"
+          />
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="option-group checkbox-group">
+          <label class="checkbox-item">
+            <input type="checkbox" v-model="store.viewOptions.showVoxelWorkpiece" />
+            <span class="cb-label">显示体素工件</span>
+          </label>
+        </div>
+      </div>
+    </div>
   </aside>
 </template>
 
@@ -236,6 +338,11 @@ function setAxisType(t) {
 
 function setColorMode(m) {
   store.updateViewOptions({ toolpathColorMode: m })
+}
+
+function formatGridSize(size) {
+  if (!size || !Array.isArray(size)) return '-'
+  return `${size[0]}×${size[1]}×${size[2]}`
 }
 </script>
 
@@ -673,5 +780,256 @@ function setColorMode(m) {
 
 .cb-label {
   font-size: 11px;
+}
+
+.collision-alarm-panel {
+  transition: all 0.3s;
+}
+
+.collision-alarm-panel.collision-active {
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+}
+
+.alarm-icon {
+  display: inline-block;
+}
+
+.collision-active .alarm-icon {
+  animation: shake 0.5s infinite;
+}
+
+@keyframes shake {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+}
+
+.alarm-status-pill {
+  padding: 3px 10px;
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.alarm-status-pill.active {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--accent-red);
+  animation: pulse-alarm 0.8s infinite;
+}
+
+@keyframes pulse-alarm {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.alarm-lamp-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.alarm-lamp {
+  position: relative;
+  width: 60px;
+  height: 60px;
+}
+
+.lamp-bulb {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #444;
+  box-shadow: inset 0 -4px 8px rgba(0, 0, 0, 0.3);
+  transition: all 0.15s;
+}
+
+.flashing .lamp-bulb {
+  background: radial-gradient(circle at 30% 30%, #ff6b6b, #ef4444, #b91c1c);
+  box-shadow: 0 0 30px #ef4444, inset 0 -4px 8px rgba(0, 0, 0, 0.2);
+  animation: lamp-flash 0.4s infinite alternate;
+}
+
+@keyframes lamp-flash {
+  0% {
+    background: radial-gradient(circle at 30% 30%, #ff8080, #ef4444, #991b1b);
+    box-shadow: 0 0 20px #ef4444, inset 0 -4px 8px rgba(0, 0, 0, 0.2);
+  }
+  100% {
+    background: radial-gradient(circle at 30% 30%, #ffb3b3, #f87171, #dc2626);
+    box-shadow: 0 0 40px #ef4444, 0 0 60px rgba(239, 68, 68, 0.5), inset 0 -4px 8px rgba(0, 0, 0, 0.2);
+  }
+}
+
+.lamp-glow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.3) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.flashing .lamp-glow {
+  opacity: 1;
+  animation: glow-pulse 0.4s infinite alternate;
+}
+
+@keyframes glow-pulse {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.6; }
+  100% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; }
+}
+
+.alarm-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.collision-active .alarm-label {
+  color: var(--accent-red);
+}
+
+.collision-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cd-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.cd-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.cd-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-green);
+}
+
+.cd-value.danger {
+  color: var(--accent-red);
+}
+
+.cd-value.count {
+  color: var(--text-primary);
+}
+
+.voxel-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+
+.voxel-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-track {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-primary);
+  border-radius: 10px;
+  transition: 0.2s;
+  border: 1px solid var(--border-color);
+}
+
+.toggle-track:before {
+  position: absolute;
+  content: '';
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  bottom: 2px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: 0.2s;
+}
+
+.voxel-toggle input:checked + .toggle-track {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--accent-cyan);
+}
+
+.voxel-toggle input:checked + .toggle-track:before {
+  transform: translateX(16px);
+  background: var(--accent-cyan);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.stat-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.stat-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-value.removed {
+  color: var(--accent-orange);
+}
+
+.voxel-slider {
+  width: 100%;
+  height: 4px;
+}
+
+.voxel-slider::-webkit-slider-runnable-track {
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+}
+
+.voxel-slider::-webkit-slider-thumb {
+  margin-top: -4px;
+  width: 12px;
+  height: 12px;
+  background: var(--accent-cyan);
+  border-radius: 50%;
+  cursor: pointer;
 }
 </style>

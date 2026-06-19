@@ -59,10 +59,16 @@ onMounted(() => {
     scene = new CNCScene(containerRef.value)
     scene.init()
     scene.setOnFrameCallback(onFrameTick)
+    scene.setOnCollisionCallback(onCollisionDetected)
+    startVoxelStatsPolling()
   }
 })
 
 onUnmounted(() => {
+  if (voxelStatsTimer) {
+    clearInterval(voxelStatsTimer)
+    voxelStatsTimer = null
+  }
   if (frameTimer) {
     clearTimeout(frameTimer)
     frameTimer = null
@@ -105,6 +111,35 @@ watch(() => store.toolParams.length, (len) => {
 })
 watch(() => props.cameraPreset, (preset) => {
   scene?.setCameraPreset(preset)
+})
+watch(() => store.viewOptions.enableVoxel, (enabled) => {
+  scene?.setVoxelEnabled(enabled)
+  if (enabled) {
+    updateVoxelStats()
+  } else {
+    store.setVoxelStats(null)
+  }
+})
+watch(() => store.viewOptions.voxelSize, (size) => {
+  if (store.viewOptions.enableVoxel) {
+    scene?.setVoxelSize(size)
+  }
+})
+watch(() => store.viewOptions.showVoxelWorkpiece, (show) => {
+  if (scene?.voxelMesh) {
+    scene.voxelMesh.visible = show
+  }
+})
+watch(() => store.isPlaying, (playing) => {
+  if (!playing) {
+    updateVoxelStats()
+  }
+})
+watch(() => store.pointCount, (count) => {
+  if (count > 0 && scene) {
+    scene.resetVoxelWorkpiece()
+    store.resetCollision()
+  }
 })
 
 function onFrameTick(dt, elapsed) {
@@ -162,6 +197,28 @@ function updateAxisFromShared(idx) {
     feedrate: dv.getFloat64(mOff.feedrate_offset + i * mOff.stride, true),
     spindle: cOff ? dv.getFloat64(cOff.spindle_offset + i * cOff.stride, true) : 0,
   })
+}
+
+function onCollisionDetected(status) {
+  store.setCollisionStatus(status)
+}
+
+let voxelStatsTimer = null
+function startVoxelStatsPolling() {
+  if (voxelStatsTimer) return
+  voxelStatsTimer = setInterval(() => {
+    if (store.viewOptions.enableVoxel && store.isPlaying) {
+      updateVoxelStats()
+    }
+  }, 200)
+}
+
+function updateVoxelStats() {
+  if (!scene || !store.viewOptions.enableVoxel) return
+  const stats = scene.getVoxelStats()
+  if (stats) {
+    store.setVoxelStats(stats)
+  }
 }
 </script>
 

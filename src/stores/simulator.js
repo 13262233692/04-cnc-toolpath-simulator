@@ -73,7 +73,20 @@ export const useSimulatorStore = defineStore('simulator', () => {
     toolpathColorMode: 'feedrate',
     trailLength: 500,
     cameraPerspective: 'iso',
+    enableVoxel: true,
+    voxelSize: 2.5,
+    showVoxelWorkpiece: true,
   })
+
+  const collisionStatus = ref({
+    active: false,
+    fixtureCollision: false,
+    workpieceCollision: false,
+    collisionCount: 0,
+    lastCollisionPos: null,
+  })
+
+  const voxelStats = ref(null)
 
   const sharedBuffers = ref({
     cartesianSAB: null,
@@ -135,6 +148,27 @@ export const useSimulatorStore = defineStore('simulator', () => {
 
   function setProcessing(status) {
     processingStatus.value = { ...processingStatus.value, ...status }
+  }
+
+  function setCollisionStatus(status) {
+    collisionStatus.value = { ...collisionStatus.value, ...status }
+    if (status.active) {
+      collisionStatus.value.collisionCount++
+    }
+  }
+
+  function setVoxelStats(stats) {
+    voxelStats.value = stats
+  }
+
+  function resetCollision() {
+    collisionStatus.value = {
+      active: false,
+      fixtureCollision: false,
+      workpieceCollision: false,
+      collisionCount: 0,
+      lastCollisionPos: null,
+    }
   }
 
   function releaseSharedBuffers() {
@@ -202,6 +236,8 @@ export const useSimulatorStore = defineStore('simulator', () => {
     viewOptions,
     sharedBuffers,
     processingStatus,
+    collisionStatus,
+    voxelStats,
     setGCodeFile,
     setParseResult,
     setIKResult,
@@ -214,6 +250,9 @@ export const useSimulatorStore = defineStore('simulator', () => {
     updateMachineConfig,
     updateToolParams,
     setProcessing,
+    setCollisionStatus,
+    setVoxelStats,
+    resetCollision,
     releaseSharedBuffers,
     reset,
     hardCleanup,
