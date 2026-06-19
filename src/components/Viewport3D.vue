@@ -46,122 +46,122 @@ const containerRef = ref(null)
 const store = useSimulatorStore()
 let scene = null
 let lastFrameTime = 0
+let frameTimer = null
 
 defineExpose({
   setCameraPreset: (preset) => scene?.setCameraPreset(preset),
   getScene: () => scene,
+  getMemoryInfo: () => scene?.getRendererInfo(),
 })
 
 onMounted(() => {
- if (containerRef.value) {
- scene = new CNCScene(containerRef.value);
- scene.init();
- scene.setOnFrameCallback(onFrameTick);
- }
-});
+  if (containerRef.value) {
+    scene = new CNCScene(containerRef.value)
+    scene.init()
+    scene.setOnFrameCallback(onFrameTick)
+  }
+})
+
 onUnmounted(() => {
- scene?.dispose();
- scene = null;
-});
+  if (frameTimer) {
+    clearTimeout(frameTimer)
+    frameTimer = null
+  }
+  if (scene) {
+    try { scene.dispose() } catch (e) { console.error('scene dispose error:', e) }
+    scene = null
+  }
+  lastFrameTime = 0
+})
+
 watch(() => [
- store.sharedBuffers.cartesianSAB,
- store.sharedBuffers.fieldOffsets,
- store.pointCount,
+  store.sharedBuffers.cartesianSAB,
+  store.sharedBuffers.fieldOffsets,
+  store.pointCount,
 ], ([sab, offsets, count]) => {
- if (sab && offsets?.cartesian && count > 0) {
- scene?.loadToolpathFromShared(sab, count, offsets.cartesian, store.viewOptions.toolpathColorMode);
- scene?.setToolIndex(0, store.viewOptions.trailLength);
- updateAxisFromShared(0);
- }
-}, { immediate: true });
+  if (sab && offsets?.cartesian && count > 0) {
+    scene?.loadToolpathFromShared(sab, count, offsets, store.viewOptions.toolpathColorMode)
+    scene?.setToolIndex(0, store.viewOptions.trailLength)
+    updateAxisFromShared(0)
+  }
+}, { immediate: true })
+
 watch(() => store.viewOptions.showGrid, (v) => {
- if (scene?.helpersGroup) {
- scene.helpersGroup.visible = v;
- }
-});
+  if (scene?.helpersGroup) scene.helpersGroup.visible = v
+})
 watch(() => store.viewOptions.showMachine, (v) => {
- if (scene?.machineGroup) {
- scene.machineGroup.visible = v;
- }
-});
+  if (scene?.machineGroup) scene.machineGroup.visible = v
+})
 watch(() => store.viewOptions.showToolpath, (v) => {
- if (scene?.toolpathGroup) {
- scene.toolpathGroup.visible = v;
- }
-});
+  if (scene?.toolpathGroup) scene.toolpathGroup.visible = v
+})
 watch(() => store.currentIndex, (idx) => {
- if (!scene)
- return;
- scene.setToolIndex(idx, store.viewOptions.trailLength);
- updateAxisFromShared(idx);
-}, { immediate: true });
+  if (!scene) return
+  scene.setToolIndex(idx, store.viewOptions.trailLength)
+  updateAxisFromShared(idx)
+}, { immediate: true })
 watch(() => store.toolParams.length, (len) => {
- scene?.setToolLength(len);
-});
+  scene?.setToolLength(len)
+})
 watch(() => props.cameraPreset, (preset) => {
- scene?.setCameraPreset(preset);
-});
+  scene?.setCameraPreset(preset)
+})
+
 function onFrameTick(dt, elapsed) {
- if (!store.isPlaying || !store.pointCount === 0)
- return;
- const now = performance.now();
- const step = (now - lastFrameTime) / 1000;
- if (step < 0.016)
- return;
- lastFrameTime = now;
- const baseSpeed = store.playbackMode === 'realtime'
- ? calculateRealtimeStep(step)
- : step * store.playSpeed * 500;
- const newIndex = Math.min(store.pointCount - 1, store.currentIndex + baseSpeed);
- store.setCurrentIndex(newIndex);
- emit('frame', { dt, elapsed, index: newIndex });
+  if (!store.isPlaying || !store.pointCount) return
+  const now = performance.now()
+  const step = (now - lastFrameTime) / 1000
+  if (step < 0.016) return
+  lastFrameTime = now
+  const baseSpeed = store.playbackMode === 'realtime'
+    ? calculateRealtimeStep(step)
+    : step * store.playSpeed * 500
+  const newIndex = Math.min(store.pointCount - 1, store.currentIndex + baseSpeed)
+  store.setCurrentIndex(newIndex)
+  emit('frame', { dt, elapsed, index: newIndex })
 }
+
 function calculateRealtimeStep(step) {
- if (!store.sharedBuffers.cartesianSAB || !store.sharedBuffers.fieldOffsets) {
- return step * 100;
- }
- const off = store.sharedBuffers.fieldOffsets.cartesian;
- if (!off)
- return step * 100;
- const dv = new DataView(store.sharedBuffers.cartesianSAB);
- const idx = Math.floor(store.currentIndex);
- const nextIdx = Math.min(store.pointCount - 1, idx + 1);
- const feed = dv.getFloat64(off.feedrate_offset + idx * off.stride, true) || 100;
- if (feed === 0)
- return step * 100;
- const x1 = dv.getFloat64(off.x_offset + idx * off.stride, true);
- const y1 = dv.getFloat64(off.y_offset + idx * off.stride, true);
- const z1 = dv.getFloat64(off.z_offset + idx * off.stride, true);
- const x2 = dv.getFloat64(off.x_offset + nextIdx * off.stride, true);
- const y2 = dv.getFloat64(off.y_offset + nextIdx * off.stride, true);
- const z2 = dv.getFloat64(off.z_offset + nextIdx * off.stride, true);
- const dist = Math.hypot(x2 - x1, y2 - y1, z2 - z1);
- if (dist < 1e-6)
- return 1;
- const feedMmPerSec = feed / 60 * store.playSpeed;
- const segTime = dist / Math.max(1, feedMmPerSec);
- return Math.min(10, (step / Math.max(0.001, segTime)));
+  if (!store.sharedBuffers.cartesianSAB || !store.sharedBuffers.fieldOffsets) {
+    return step * 100
+  }
+  const off = store.sharedBuffers.fieldOffsets.cartesian
+  if (!off) return step * 100
+  const dv = new DataView(store.sharedBuffers.cartesianSAB)
+  const idx = Math.floor(store.currentIndex)
+  const nextIdx = Math.min(store.pointCount - 1, idx + 1)
+  const feed = dv.getFloat64(off.feedrate_offset + idx * off.stride, true) || 100
+  if (feed === 0) return step * 100
+  const x1 = dv.getFloat64(off.x_offset + idx * off.stride, true)
+  const y1 = dv.getFloat64(off.y_offset + idx * off.stride, true)
+  const z1 = dv.getFloat64(off.z_offset + idx * off.stride, true)
+  const x2 = dv.getFloat64(off.x_offset + nextIdx * off.stride, true)
+  const y2 = dv.getFloat64(off.y_offset + nextIdx * off.stride, true)
+  const z2 = dv.getFloat64(off.z_offset + nextIdx * off.stride, true)
+  const dist = Math.hypot(x2 - x1, y2 - y1, z2 - z1)
+  if (dist < 1e-6) return 1
+  const feedMmPerSec = feed / 60 * store.playSpeed
+  const segTime = dist / Math.max(1, feedMmPerSec)
+  return Math.min(10, (step / Math.max(0.001, segTime)))
 }
+
 function updateAxisFromShared(idx) {
- if (!store.sharedBuffers.machineSAB || !store.sharedBuffers.fieldOffsets)
- return;
- const mOff = store.sharedBuffers.fieldOffsets.machine;
- const cOff = store.sharedBuffers.fieldOffsets.cartesian;
- if (!mOff) {
- return;
- }
- const dv = new DataView(store.sharedBuffers.machineSAB);
- const i = Math.floor(idx);
- store.setCurrentAxis({
- x: dv.getFloat64(mOff.x_offset + i * mOff.stride, true),
- y: dv.getFloat64(mOff.y_offset + i * mOff.stride, true),
- z: dv.getFloat64(mOff.z_offset + i * mOff.stride, true),
- a: dv.getFloat64(mOff.a_offset + i * mOff.stride, true),
- b: dv.getFloat64(mOff.b_offset + i * mOff.stride, true),
- c: dv.getFloat64(mOff.c_offset + i * mOff.stride, true),
- feedrate: dv.getFloat64(mOff.feedrate_offset + i * mOff.stride, true),
- spindle: cOff ? dv.getFloat64(cOff.spindle_offset + i * cOff.stride, true) : 0,
- });
+  if (!store.sharedBuffers.machineSAB || !store.sharedBuffers.fieldOffsets) return
+  const mOff = store.sharedBuffers.fieldOffsets.machine
+  const cOff = store.sharedBuffers.fieldOffsets.cartesian
+  if (!mOff) return
+  const dv = new DataView(store.sharedBuffers.machineSAB)
+  const i = Math.floor(idx)
+  store.setCurrentAxis({
+    x: dv.getFloat64(mOff.x_offset + i * mOff.stride, true),
+    y: dv.getFloat64(mOff.y_offset + i * mOff.stride, true),
+    z: dv.getFloat64(mOff.z_offset + i * mOff.stride, true),
+    a: dv.getFloat64(mOff.a_offset + i * mOff.stride, true),
+    b: dv.getFloat64(mOff.b_offset + i * mOff.stride, true),
+    c: dv.getFloat64(mOff.c_offset + i * mOff.stride, true),
+    feedrate: dv.getFloat64(mOff.feedrate_offset + i * mOff.stride, true),
+    spindle: cOff ? dv.getFloat64(cOff.spindle_offset + i * cOff.stride, true) : 0,
+  })
 }
 </script>
 

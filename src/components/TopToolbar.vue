@@ -113,6 +113,7 @@ async function onLoadGCode() {
       filters: [{ name: 'G-code', extensions: ['nc', 'gcode', 'tap', 'cnc', 'txt'] }],
     })
     if (!result?.ok) return
+    store.reset()
     store.setProcessing({ parsing: true, error: null })
     store.setGCodeFile({
       path: result.filePath,

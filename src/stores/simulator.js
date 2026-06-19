@@ -137,19 +137,53 @@ export const useSimulatorStore = defineStore('simulator', () => {
     processingStatus.value = { ...processingStatus.value, ...status }
   }
 
-  function reset() {
-    pointCount.value = 0
-    currentIndex.value = 0
-    isPlaying.value = false
-    parseMetadata.value = null
-    ikMetadata.value = null
+  function releaseSharedBuffers() {
+    const current = sharedBuffers.value
+    if (current.cartesianSAB) {
+      try {
+        if (typeof current.cartesianSAB.detach === 'function') {
+          current.cartesianSAB.detach()
+        }
+      } catch (e) { /* noop */ }
+      current.cartesianSAB = null
+    }
+    if (current.machineSAB) {
+      try {
+        if (typeof current.machineSAB.detach === 'function') {
+          current.machineSAB.detach()
+        }
+      } catch (e) { /* noop */ }
+      current.machineSAB = null
+    }
+    current.fieldOffsets = null
     sharedBuffers.value = {
       cartesianSAB: null,
       machineSAB: null,
       fieldOffsets: null,
     }
+  }
+
+  function reset() {
+    isPlaying.value = false
+    pointCount.value = 0
+    currentIndex.value = 0
+    parseMetadata.value = null
+    ikMetadata.value = null
+    releaseSharedBuffers()
     currentAxis.value = { x: 0, y: 0, z: 0, a: 0, b: 0, c: 0, feedrate: 0, spindle: 0 }
     processingStatus.value = { parsing: false, solving: false, error: null }
+  }
+
+  function hardCleanup() {
+    isPlaying.value = false
+    releaseSharedBuffers()
+    parseMetadata.value = null
+    ikMetadata.value = null
+    pointCount.value = 0
+    currentIndex.value = 0
+    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
+      try { window.gc() } catch (e) { /* noop */ }
+    }
   }
 
   return {
@@ -180,6 +214,8 @@ export const useSimulatorStore = defineStore('simulator', () => {
     updateMachineConfig,
     updateToolParams,
     setProcessing,
+    releaseSharedBuffers,
     reset,
+    hardCleanup,
   }
 })

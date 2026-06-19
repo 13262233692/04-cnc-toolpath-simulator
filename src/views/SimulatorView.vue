@@ -43,7 +43,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  store.setPlaying(false)
+  store.hardCleanup()
 })
 </script>
 

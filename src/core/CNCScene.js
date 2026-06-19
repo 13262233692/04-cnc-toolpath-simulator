@@ -20,7 +20,19 @@ export class CNCScene {
     this.helpersGroup = new THREE.Group()
 
     this.toolpathLine = null
+    this.toolpathGeometry = null
+    this.toolpathPositionsAttr = null
+    this.toolpathColorsAttr = null
+    this.toolpathMaterial = null
+
     this.trailLine = null
+    this.trailGeometry = null
+    this.trailPositionsAttr = null
+    this.trailColorsAttr = null
+    this.trailMaterial = null
+    this.trailMaxPoints = 2000
+    this.trailCurrentCount = 0
+
     this.toolMesh = null
     this.toolHolderMesh = null
     this.currentToolIndex = 0
@@ -32,7 +44,9 @@ export class CNCScene {
     this.feedrateValues = null
     this.maxFeedrate = 5000
 
+    this._disposed = false
     this.isInitialized = false
+    this._renderInfo = { geometries: 0, materials: 0, textures: 0 }
   }
 
   init() {
@@ -264,7 +278,6 @@ export class CNCScene {
 
   loadToolpathFromShared(sab, count, offsets, colorMode = 'feedrate') {
     this._clearToolpath()
-    this._clearTrail()
     this.sharedSAB = sab
     this.fieldOffsets = offsets
     this.totalToolPoints = count
@@ -302,18 +315,23 @@ export class CNCScene {
       colors[i * 3 + 2] = color.b
     }
 
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    this.toolpathGeometry = new THREE.BufferGeometry()
+    this.toolpathPositionsAttr = new THREE.BufferAttribute(positions, 3)
+    this.toolpathColorsAttr = new THREE.BufferAttribute(colors, 3)
+    this.toolpathPositionsAttr.setUsage(THREE.StaticDrawUsage)
+    this.toolpathColorsAttr.setUsage(THREE.StaticDrawUsage)
+    this.toolpathGeometry.setAttribute('position', this.toolpathPositionsAttr)
+    this.toolpathGeometry.setAttribute('color', this.toolpathColorsAttr)
+    this.toolpathGeometry.setDrawRange(0, count)
 
-    const material = new THREE.LineBasicMaterial({
+    this.toolpathMaterial = new THREE.LineBasicMaterial({
       vertexColors: true,
       transparent: true,
       opacity: 0.85,
       linewidth: 1,
     })
 
-    this.toolpathLine = new THREE.Line(geometry, material)
+    this.toolpathLine = new THREE.Line(this.toolpathGeometry, this.toolpathMaterial)
     this.toolpathGroup.add(this.toolpathLine)
     this._fitCameraToToolpath(positions, count)
   }
@@ -370,46 +388,83 @@ export class CNCScene {
     const z = this.cartesianPositions[base + 2]
 
     this.toolGroup.position.set(x, y + 700, z)
-    this._updateTrail(idx, trailLength)
+    this._updateTrailFast(idx, trailLength)
     this._updateMachinePose(x, y, z, idx)
   }
 
-  _updateTrail(endIdx, trailLength) {
-    this._clearTrail()
-    if (trailLength <= 0) return
-
-    const startIdx = Math.max(0, endIdx - trailLength)
-    const count = endIdx - startIdx + 1
-    if (count < 2) return
-
-    const positions = new Float32Array(count * 3)
-    const colors = new Float32Array(count * 3)
-
-    for (let i = 0; i < count; i++) {
-      const srcIdx = (startIdx + i) * 3
-      positions[i * 3] = this.cartesianPositions[srcIdx]
-      positions[i * 3 + 1] = this.cartesianPositions[srcIdx + 1]
-      positions[i * 3 + 2] = this.cartesianPositions[srcIdx + 2]
-
-      const t = i / (count - 1)
-      const color = this._heatmapColor(t)
-      colors[i * 3] = color.r
-      colors[i * 3 + 1] = color.g
-      colors[i * 3 + 2] = color.b
+  _ensureTrailGeometry(maxPoints) {
+    if (this.trailLine && this.trailPositionsAttr && this.trailPositionsAttr.count >= maxPoints) {
+      return
     }
+    this._clearTrail()
 
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    const trailPositions = new Float32Array(maxPoints * 3)
+    const trailColors = new Float32Array(maxPoints * 3)
 
-    const mat = new THREE.LineBasicMaterial({
+    this.trailGeometry = new THREE.BufferGeometry()
+    this.trailPositionsAttr = new THREE.BufferAttribute(trailPositions, 3)
+    this.trailColorsAttr = new THREE.BufferAttribute(trailColors, 3)
+    this.trailPositionsAttr.setUsage(THREE.DynamicDrawUsage)
+    this.trailColorsAttr.setUsage(THREE.DynamicDrawUsage)
+    this.trailGeometry.setAttribute('position', this.trailPositionsAttr)
+    this.trailGeometry.setAttribute('color', this.trailColorsAttr)
+    this.trailGeometry.setDrawRange(0, 0)
+
+    this.trailMaterial = new THREE.LineBasicMaterial({
       vertexColors: true,
       transparent: true,
       opacity: 0.95,
     })
 
-    this.trailLine = new THREE.Line(geo, mat)
+    this.trailLine = new THREE.Line(this.trailGeometry, this.trailMaterial)
     this.trailGroup.add(this.trailLine)
+    this.trailMaxPoints = maxPoints
+    this.trailCurrentCount = 0
+  }
+
+  _updateTrailFast(endIdx, trailLength) {
+    if (!this.cartesianPositions || this.totalToolPoints === 0) return
+    if (trailLength <= 0) {
+      this.trailGeometry?.setDrawRange(0, 0)
+      return
+    }
+
+    const safeLen = Math.min(trailLength, this.trailMaxPoints)
+    const startIdx = Math.max(0, endIdx - safeLen + 1)
+    const count = endIdx - startIdx + 1
+    if (count < 2) {
+      this.trailGeometry?.setDrawRange(0, 0)
+      this.trailCurrentCount = 0
+      return
+    }
+
+    this._ensureTrailGeometry(safeLen)
+
+    const posArr = this.trailPositionsAttr.array
+    const colArr = this.trailColorsAttr.array
+
+    for (let i = 0; i < count; i++) {
+      const srcIdx = (startIdx + i) * 3
+      const dstIdx = i * 3
+      posArr[dstIdx] = this.cartesianPositions[srcIdx]
+      posArr[dstIdx + 1] = this.cartesianPositions[srcIdx + 1]
+      posArr[dstIdx + 2] = this.cartesianPositions[srcIdx + 2]
+
+      const t = i / (count - 1)
+      const color = this._heatmapColor(t)
+      colArr[dstIdx] = color.r
+      colArr[dstIdx + 1] = color.g
+      colArr[dstIdx + 2] = color.b
+    }
+
+    this.trailPositionsAttr.needsUpdate = true
+    this.trailColorsAttr.needsUpdate = true
+    this.trailGeometry.setDrawRange(0, count)
+    this.trailCurrentCount = count
+  }
+
+  _updateTrail(endIdx, trailLength) {
+    this._updateTrailFast(endIdx, trailLength)
   }
 
   _updateMachinePose(x, y, z, idx) {
@@ -428,28 +483,69 @@ export class CNCScene {
     }
   }
 
+  _disposeAttribute(attr) {
+    if (attr) {
+      try { attr.dispose?.() } catch (e) { /* noop */ }
+    }
+  }
+
+  _disposeGeometry(geo) {
+    if (!geo) return
+    if (geo.index) {
+      this._disposeAttribute(geo.index)
+    }
+    geo.deleteAttribute?.('position')
+    geo.deleteAttribute?.('color')
+    geo.deleteAttribute?.('normal')
+    geo.deleteAttribute?.('uv')
+    try { geo.dispose?.() } catch (e) { /* noop */ }
+  }
+
+  _disposeMaterial(mat) {
+    if (mat) {
+      try { mat.dispose?.() } catch (e) { /* noop */ }
+    }
+  }
+
   _clearToolpath() {
     if (this.toolpathLine) {
-      this.toolpathLine.geometry.dispose()
-      this.toolpathLine.material.dispose()
       this.toolpathGroup.remove(this.toolpathLine)
+      this._disposeGeometry(this.toolpathLine.geometry)
+      this._disposeMaterial(this.toolpathLine.material)
       this.toolpathLine = null
     }
+    this._disposeAttribute(this.toolpathPositionsAttr)
+    this._disposeAttribute(this.toolpathColorsAttr)
+    this._disposeGeometry(this.toolpathGeometry)
+    this._disposeMaterial(this.toolpathMaterial)
+    this.toolpathPositionsAttr = null
+    this.toolpathColorsAttr = null
+    this.toolpathGeometry = null
+    this.toolpathMaterial = null
   }
 
   _clearTrail() {
     if (this.trailLine) {
-      this.trailLine.geometry.dispose()
-      this.trailLine.material.dispose()
       this.trailGroup.remove(this.trailLine)
+      this._disposeGeometry(this.trailLine.geometry)
+      this._disposeMaterial(this.trailLine.material)
       this.trailLine = null
     }
+    this._disposeAttribute(this.trailPositionsAttr)
+    this._disposeAttribute(this.trailColorsAttr)
+    this._disposeGeometry(this.trailGeometry)
+    this._disposeMaterial(this.trailMaterial)
+    this.trailPositionsAttr = null
+    this.trailColorsAttr = null
+    this.trailGeometry = null
+    this.trailMaterial = null
+    this.trailCurrentCount = 0
   }
 
   setToolLength(length) {
     if (!this.toolMesh) return
     const toolR = 5
-    this.toolMesh.geometry.dispose()
+    this._disposeGeometry(this.toolMesh.geometry)
     this.toolMesh.geometry = new THREE.CylinderGeometry(toolR, toolR * 0.3, length, 24)
     this.toolMesh.position.y = -length / 2 - 80
   }
@@ -525,28 +621,73 @@ export class CNCScene {
     }
   }
 
-  dispose() {
-    if (this.animationId) {
-      cancelAnimationFrame(this.animationId)
-    }
-    window.removeEventListener('resize', this._onResize)
-    this._clearToolpath()
-    this._clearTrail()
-    if (this.renderer) {
-      this.renderer.dispose()
-      if (this.renderer.domElement?.parentNode) {
-        this.renderer.domElement.parentNode.removeChild(this.renderer.domElement)
+  forceGPUResourceCleanup() {
+    if (!this.renderer) return
+    const gl = this.renderer.getContext()
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_lose_context')
+      if (ext) {
+        try { ext.loseContext() } catch (e) { /* noop */ }
       }
     }
+  }
+
+  dispose() {
+    if (this._disposed) return
+    this._disposed = true
+
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId)
+      this.animationId = null
+    }
+    window.removeEventListener('resize', this._onResize)
+
+    this._clearToolpath()
+    this._clearTrail()
+
+    if (this.controls?.dispose) {
+      try { this.controls.dispose() } catch (e) { /* noop */ }
+    }
+    this.controls = null
+
     this.scene?.traverse((obj) => {
-      if (obj.geometry) obj.geometry.dispose?.()
+      if (obj.isMesh || obj.isLine || obj.isPoints) {
+        this._disposeGeometry(obj.geometry)
+      }
       if (obj.material) {
         if (Array.isArray(obj.material)) {
-          obj.material.forEach((m) => m.dispose?.())
+          obj.material.forEach((m) => this._disposeMaterial(m))
         } else {
-          obj.material.dispose?.()
+          this._disposeMaterial(obj.material)
+          if (obj.material.map) {
+            try { obj.material.map.dispose?.() } catch (e) { /* noop */ }
+          }
         }
       }
     })
+
+    this.scene?.clear?.()
+
+    this.forceGPUResourceCleanup()
+
+    if (this.renderer) {
+      try {
+        this.renderer.dispose?.()
+        this.renderer.forceContextLoss?.()
+      } catch (e) { /* noop */ }
+      if (this.renderer.domElement?.parentNode) {
+        this.renderer.domElement.parentNode.removeChild(this.renderer.domElement)
+      }
+      this.renderer = null
+    }
+
+    this.cartesianPositions = null
+    this.feedrateValues = null
+    this.sharedSAB = null
+    this.fieldOffsets = null
+
+    this.scene = null
+    this.camera = null
+    this.controls = null
   }
 }
